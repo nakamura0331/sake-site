@@ -1,0 +1,522 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>日本酒ナビ - 初期版</title>
+  <!-- Tailwind CSS via CDN（学習・試作向け。量産時はローカルビルド推奨） -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    /* 可読性向上のための最小カスタム */
+    .badge{ font-size:0.75rem; padding:0.125rem 0.5rem; border-radius:9999px; background:#f1f5f9; border:1px solid #e2e8f0; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800">
+  <header class="max-w-5xl mx-auto p-4 md:p-6">
+    <h1 class="text-2xl md:text-3xl font-bold">日本酒ナビ <span class="text-slate-400 text-base">— 種類 / 米 / 精米から探す</span></h1>
+  </header>
+
+  <!-- フィルタ UI -->
+  <section class="max-w-5xl mx-auto grid grid-cols-1 md:grid-cols-4 gap-3 p-4 md:p-6">
+    <div>
+      <label class="block text-sm font-medium mb-1">特定名称</label>
+      <select id="classification" class="w-full rounded-lg border-slate-300">
+        <option value="">すべて</option>
+      </select>
+    </div>
+    <div>
+      <label class="block text-sm font-medium mb-1">原料米</label>
+      <select id="rice" class="w-full rounded-lg border-slate-300">
+        <option value="">すべて</option>
+        <option>山田錦</option>
+        <option>五百万石</option>
+        <option>美山錦</option>
+        <option>雄町</option>
+      </select>
+    </div>
+    <div>
+      <label class="block text-sm font-medium mb-1">精米歩合（最大%）<span id="polishVal" class="ml-1 text-slate-500"></span></label>
+      <input id="polish" type="range" min="30" max="80" value="80" step="1" class="w-full" />
+    </div>
+    <div>
+      <label class="block text-sm font-medium mb-1">キーワード</label>
+      <input id="q" type="text" placeholder="酒名・蔵元・メモ" class="w-full rounded-lg border-slate-300" />
+    </div>
+  </section>
+
+  <!-- 件数 & リセット -->
+  <section class="max-w-5xl mx-auto px-4 md:px-6 flex items-center justify-between text-sm text-slate-600">
+    <div id="count">0件</div>
+    <button id="reset" class="underline">フィルタをリセット</button>
+  </section>
+
+  <!-- CSV 読み込み UI -->
+  <section class="max-w-5xl mx-auto px-4 md:px-6 mt-2 text-sm">
+    <div class="flex flex-col md:flex-row items-start gap-3">
+      <label class="font-medium">CSVを読み込む（sake.csv）:</label>
+      <input id="csvFile" type="file" accept=".csv" class="text-sm" />
+      <button id="loadCsvBtn" class="px-3 py-1 rounded-lg border shadow-sm">読み込む</button>
+      <span id="csvStatus" class="text-slate-500"></span>
+    </div>
+  </section>
+
+  <!-- 一覧 -->
+  <main class="max-w-5xl mx-auto p-4 md:p-6 grid grid-cols-1 md:grid-cols-2 gap-4" id="list"></main>
+
+
+  <script>
+    // --- サンプルデータ（まずは5本） ---
+    const DATA = [
+      {
+        name: "而今 純米吟醸",
+        brewery: "木屋正酒造",
+        prefecture: "三重",
+        classification: "純米吟醸",
+        rice: "山田錦",
+        polish_rate: 50,
+        abv: 16,
+        smv: 1,
+        acidity: 1.6,
+        taste: { sweetness: 2, aroma: 4, body: 3, crisp: 3 },
+        notes: "華やかな吟醸香とジューシーさ。",
+      },
+      {
+        name: "獺祭39 純米大吟醸",
+        brewery: "旭酒造",
+        prefecture: "山口",
+        classification: "純米大吟醸",
+        rice: "山田錦",
+        polish_rate: 39,
+        abv: 16,
+        smv: 3,
+        acidity: 1.3,
+        taste: { sweetness: 2, aroma: 5, body: 2, crisp: 3 },
+        notes: "クリーンでフルーティ。",
+      },
+      {
+        name: "黒龍 吟醸 いっちょらい",
+        brewery: "黒龍酒造",
+        prefecture: "福井",
+        classification: "吟醸",
+        rice: "五百万石",
+        polish_rate: 55,
+        abv: 15,
+        smv: 5,
+        acidity: 1.2,
+        taste: { sweetness: 1, aroma: 3, body: 2, crisp: 4 },
+        notes: "すっきりとしたキレ。",
+      },
+      {
+        name: "仙禽 オーガニック・ナチュール",
+        brewery: "せんきん",
+        prefecture: "栃木",
+        classification: "純米",
+        rice: "雄町",
+        polish_rate: 90,
+        abv: 14,
+        smv: -1,
+        acidity: 1.9,
+        taste: { sweetness: 3, aroma: 2, body: 4, crisp: 2 },
+        notes: "旨味と酸のコントラスト。",
+      },
+      {
+        name: "真澄 純米吟醸 みやさか",
+        brewery: "宮坂醸造",
+        prefecture: "長野",
+        classification: "純米吟醸",
+        rice: "美山錦",
+        polish_rate: 55,
+        abv: 16,
+        smv: 2,
+        acidity: 1.5,
+        taste: { sweetness: 2, aroma: 3, body: 3, crisp: 3 },
+        notes: "バランス良く、食中向け。",
+      },
+    ];
+
+    // 追加：分類を埋める代表銘柄（デモ用）
+    DATA.push(
+      {
+        name: "水芭蕉 純米吟醸スパークリング",
+        brewery: "永井酒造",
+        prefecture: "群馬",
+        classification: "発泡",
+        rice: "山田錦",
+        polish_rate: 50,
+        abv: 13,
+        smv: -5,
+        acidity: 1.5,
+        taste: { sweetness: 4, aroma: 4, body: 2, crisp: 3 },
+        notes: "爽快な泡とフルーティな香り。",
+      },
+      {
+        name: "一ノ蔵 貴醸酒",
+        brewery: "一ノ蔵",
+        prefecture: "宮城",
+        classification: "貴醸酒",
+        rice: "ササニシキ",
+        polish_rate: 65,
+        abv: 14,
+        smv: -25,
+        acidity: 1.6,
+        taste: { sweetness: 5, aroma: 3, body: 4, crisp: 1 },
+        notes: "仕込み水の代わりに清酒を用いるため濃厚で上品な甘み。",
+      },
+      {
+        name: "月桂冠 生貯蔵酒",
+        brewery: "月桂冠",
+        prefecture: "京都",
+        classification: "生貯蔵",
+        rice: "一般米",
+        polish_rate: 70,
+        abv: 13,
+        smv: +2,
+        acidity: 1.2,
+        taste: { sweetness: 2, aroma: 2, body: 2, crisp: 3 },
+        notes: "しぼりたてを貯蔵前のみ火入れ、フレッシュ感とクリアさ。",
+      },
+      {
+        name: "出羽桜 桜花 吟醸 生詰",
+        brewery: "出羽桜酒造",
+        prefecture: "山形",
+        classification: "生詰",
+        rice: "美山錦",
+        polish_rate: 50,
+        abv: 15,
+        smv: +5,
+        acidity: 1.2,
+        taste: { sweetness: 1, aroma: 4, body: 2, crisp: 3 },
+        notes: "瓶詰時のみ火入れで華やかな香り。",
+      },
+      {
+        name: "鶴齢 古酒（例）",
+        brewery: "青木酒造",
+        prefecture: "新潟",
+        classification: "古酒",
+        rice: "五百万石",
+        polish_rate: 60,
+        abv: 17,
+        smv: +3,
+        acidity: 1.8,
+        taste: { sweetness: 2, aroma: 3, body: 5, crisp: 2 },
+        notes: "熟成による複雑味と落ち着いた香り（例示）。",
+      }
+    );
+
+    // --- ユーティリティ ---
+
+    // CSVヘルパ：簡易CSVパーサ（引用符対応）
+    function parseCSV(text){
+      const rows=[]; let cur=''; let inQ=false; let row=[];
+      for(let i=0;i<text.length;i++){
+        const c=text[i], n=text[i+1];
+        if(c==='"'){
+          if(inQ && n==='"'){ cur+='"'; i++; }
+          else inQ=!inQ;
+        } else if(c===',' && !inQ){ row.push(cur); cur=''; }
+        else if((c==='\n' || c==='\r') && !inQ){ if(cur!==''||row.length>0){ row.push(cur); rows.push(row); row=[]; cur=''; } }
+        else cur+=c;
+      }
+      if(cur!==''||row.length>0){ row.push(cur); rows.push(row); }
+      return rows;
+    }
+
+    // CSV → DATA 変換
+    function importFromCSV(text){
+      const rows=parseCSV(text).filter(r=>r.length && r.join('').trim()!=='');
+      if(rows.length<2) throw new Error('CSVにデータ行がありません');
+      const header=rows[0].map(h=>h.trim());
+      const idx = (name)=> header.indexOf(name);
+      const required=['酒名','蔵元','都道府県','特定名称（例: 純米吟醸）','原料米（単一/ブレンド）','精米歩合（%）'];
+      required.forEach(col=>{ if(!header.includes(col)) throw new Error(`必須列がありません: ${col}`); });
+
+      const out=[];
+      for(let i=1;i<rows.length;i++){
+        const r=rows[i];
+        const g=(col)=> r[idx(col)] ?? '';
+        const toNum=(v)=>{ const n=Number(String(v).replace(/%/g,'')); return Number.isFinite(n)?n:undefined; };
+        const taste={
+          sweetness: toNum(g('甘味'))||toNum(g('甘'))||0,
+          aroma: toNum(g('香り'))||0,
+          body: toNum(g('ボディ'))||0,
+          crisp: toNum(g('キレ'))||0
+        };
+        out.push({
+          name: g('酒名'),
+          brewery: g('蔵元'),
+          prefecture: g('都道府県'),
+          classification: g('特定名称（例: 純米吟醸）'),
+          rice: g('原料米（単一/ブレンド）'),
+          polish_rate: toNum(g('精米歩合（%）')),
+          abv: toNum(g('アルコール度数（%）')),
+          smv: toNum(g('日本酒度')),
+          acidity: toNum(g('酸度')),
+          taste,
+          notes: g('テイスティングノート') || g('ペアリングメモ') || '',
+          url: g('URL') || '',
+          image: g('画像ファイル名（任意）') || ''
+        });
+      }
+      return out;
+    }
+
+    async function tryFetchLocalCSV(){
+      try{
+        const res = await fetch('./sake.csv', {cache:'no-store'});
+        if(!res.ok) return false;
+        const text = await res.text();
+        const imported = importFromCSV(text);
+        // 既存データの上にマージ（重複を避ける簡易キー: name+brewery）
+        const key = (x)=> `${x.name}__${x.brewery}`;
+        const seen = new Set(DATA.map(key));
+        imported.forEach(x=>{ if(!seen.has(key(x))) DATA.push(x); });
+        document.getElementById('csvStatus').textContent = `sake.csv を読み込みました（${imported.length}件）`;
+        filter();
+        return true;
+      }catch(e){ console.warn('CSV fetch failed', e); return false; }
+    }
+
+    function setupCSVLoader(){
+      const fileEl = document.getElementById('csvFile');
+      const btn = document.getElementById('loadCsvBtn');
+      const stat = document.getElementById('csvStatus');
+      if(!fileEl || !btn) return;
+      btn.addEventListener('click', ()=>{
+        if(!fileEl.files?.length){ stat.textContent = 'CSVファイルを選んでください'; return; }
+        const f=fileEl.files[0];
+        const reader=new FileReader();
+        reader.onload=()=>{
+          try{
+            const imported=importFromCSV(String(reader.result));
+            const key = (x)=> `${x.name}__${x.brewery}`;
+            const seen = new Set(DATA.map(key));
+            imported.forEach(x=>{ if(!seen.has(key(x))) DATA.push(x); });
+            stat.textContent=`読み込み完了：${imported.length}件追加`;
+            filter();
+          }catch(err){ stat.textContent=`読み込み失敗：${err.message}`; }
+        };
+        reader.readAsText(f, 'utf-8');
+      });
+    }
+    const $ = (sel) => document.querySelector(sel);
+    const listEl = $("#list");
+    const countEl = $("#count");
+    const polishEl = $("#polish");
+    const polishValEl = $("#polishVal");
+
+    // --- 大量の日本酒「種類」タグ（約100種） ---
+    const CLASSIFICATIONS = [
+      // 特定名称
+      "純米","特別純米","純米吟醸","純米大吟醸","吟醸","大吟醸","本醸造","特別本醸造",
+      // 発泡/濁り
+      "発泡","スパークリング","微発泡","活性にごり","にごり","おりがらみ","活性酒","直汲みスパークリング",
+      // 火入れ/貯蔵タイミング
+      "生酒","生詰","生貯蔵","一回火入れ","二回火入れ","無加圧直汲み","槽口直詰め","瓶燗火入れ","瓶囲い",
+      // しぼり分け
+      "しぼりたて","新酒","荒走り","中取り","中汲み","責め","袋吊り","雫取り","斗瓶取り","無濾過","無濾過生",
+      // 仕込み/酒母
+      "生酛","山廃","速醸","高温山廃","菩提酛","木桶仕込み","槽しぼり","遠心分離",
+      // 風味/スタイル
+      "淡麗","濃醇","芳醇旨口","ドライ","辛口","超辛口","甘口","旨口","ミネラリー","ジューシー","フルーティ","食中酒",
+      // 熟成/木樽
+      "古酒","長期熟成酒","生熟成","低温熟成","氷温熟成","樽酒","杉樽","アメリカンオーク樽","ミズナラ樽",
+      // 原酒/度数/処理
+      "原酒","加水あり","加水なし","低アル","高アル","火入れ原酒","中取り原酒",
+      // 季節/限定
+      "夏酒","秋あがり","ひやおろし","春酒","冬酒","限定流通","直汲み","無加圧",
+      // 原料・副原料/特殊
+      "貴醸酒","低精白","高精白","山田錦仕様","五百万石仕様","美山錦仕様","雄町仕様","亀の尾仕様","愛山仕様","出羽燦々仕様","酒未来仕様",
+      // 酵母/香り
+      "協会6号","協会7号","協会9号","協会10号","協会14号","M310","明利酵母","白麹ブレンド","酵母無添加",
+      // 仕上げ/その他
+      "直汲み","直汲み生","直汲み生原酒","中取り生原酒","しずく酒","にごり原酒","遠心分離無濾過生",
+      // 地域・出荷表現（参考タグ）
+      "寒造り","早春しぼり","初しぼり","おり酒","うすにごり","活性うすにごり","直汲みおりがらみ","鑑評会出品酒","プレミアム",
+      // 低温発酵系
+      "吟醸香タイプ","カプロン酸エチル系","酢酸イソアミル系",
+      // その他（便宜上の拡張タグ）
+      "低温瓶内二次発酵","古典生酛","木槽しぼり","直汲み火入れ","限定袋吊り","槽場汲み","槽場直汲み"
+    ];
+
+    function formatBadge(text){
+      return `<span class="badge">${text}</span>`;
+    }
+
+    function render(items){
+      listEl.innerHTML = items.map(item => {
+        return `
+          <article class="bg-white rounded-2xl p-4 shadow-sm border">
+            <header class="flex items-baseline justify-between gap-2">
+              <h3 class="text-lg font-semibold">${item.name}</h3>
+              <div class="flex gap-1 flex-wrap text-slate-600">
+                ${formatBadge(item.classification)}
+                ${formatBadge(item.rice)}
+                ${formatBadge(`${item.polish_rate}%`)}
+              </div>
+            </header>
+            <p class="mt-1 text-sm text-slate-600">${item.brewery}（${item.prefecture}）</p>
+
+            <dl class="grid grid-cols-2 md:grid-cols-4 gap-y-1 gap-x-4 mt-3 text-sm">
+              <div><dt class="text-slate-500">Alc</dt><dd>${item.abv}%</dd></div>
+              <div><dt class="text-slate-500">日本酒度</dt><dd>${item.smv}</dd></div>
+              <div><dt class="text-slate-500">酸度</dt><dd>${item.acidity}</dd></div>
+              <div><dt class="text-slate-500">テイスト</dt><dd>
+                甘:${item.taste.sweetness} 香:${item.taste.aroma} 旨:${item.taste.body} キレ:${item.taste.crisp}
+              </dd></div>
+            </dl>
+            <p class="mt-2 text-sm">${item.notes ?? ""}</p>
+          </article>
+        `
+      }).join("");
+      if (countEl) countEl.textContent = `${items.length}件`;
+    }
+    function filter(){
+      const c = document.querySelector('#classification').value;
+      const r = document.querySelector('#rice').value;
+      const p = Number(document.querySelector('#polish').value);
+      const q = document.querySelector('#q').value.trim().toLowerCase();
+      let items = DATA.filter(x => (
+        (c === "" || x.classification === c) &&
+        (r === "" || x.rice === r) &&
+        ((x.polish_rate == null || Number.isNaN(Number(x.polish_rate))) || x.polish_rate <= p) &&
+        (q === "" || `${x.name} ${x.brewery} ${x.prefecture} ${x.notes}`.toLowerCase().includes(q))
+      ));
+      render(items);
+    }
+    function init(){
+      // 分類プルダウンを動的生成
+      const clsSel = document.querySelector('#classification');
+      if (clsSel) {
+        clsSel.innerHTML = '<option value="">すべて</option>' + CLASSIFICATIONS.map(x=>`<option>${x}</option>`).join('');
+      }
+      polishValEl.textContent = `${polishEl.value}%`;
+      ["change","input"].forEach(evt => {
+        document.querySelector("#classification").addEventListener(evt, filter);
+        document.querySelector("#rice").addEventListener(evt, filter);
+        document.querySelector("#polish").addEventListener(evt, () => { polishValEl.textContent = `${polishEl.value}%`; filter(); });
+        document.querySelector("#q").addEventListener(evt, filter);
+      });
+      document.querySelector("#reset").addEventListener("click", () => {
+        document.querySelector("#classification").value = "";
+        document.querySelector("#rice").value = "";
+        document.querySelector("#polish").value = 80; polishValEl.textContent = `80%`;
+        document.querySelector("#q").value = "";
+        filter();
+      });
+      filter();
+    }
+
+    // --- 日本酒クイズ（5問×5択・即時採点） ---
+    const QUIZ = [
+      {
+        q: '精米歩合が小さいほど一般にどうなりやすい？',
+        choices: ['雑味が増える', '香りが華やか・軽快になりやすい', '色が濃くなる', '必ず辛口になる', '必ず甘口になる'],
+        answer: 1,
+        exp: 'よく磨くほど雑味が減り、クリアで香りが立ちやすい傾向（例外あり）。'
+      },
+      {
+        q: '日本酒度（SMV）が+に振れるほど？',
+        choices: ['甘口傾向', '辛口傾向', '酸が高い', '旨味が強い', '発泡している'],
+        answer: 1,
+        exp: '日本酒度は+で辛口傾向、-で甘口傾向。ただし酸度とのバランスで体感は変わる。'
+      },
+      {
+        q: '山田錦の一般的な傾向に最も近いのは？',
+        choices: ['軽快でキレ重視', 'リッチで厚みが出やすい', 'バランスとふくらみ', '極端に酸が高い', '常ににごりになる'],
+        answer: 2,
+        exp: '山田錦は心白が大きく吟醸向き、バランスとふくらみが出やすいとされる。'
+      },
+      {
+        q: '生酒の特徴として適切なのは？',
+        choices: ['必ず熱燗向け', 'フレッシュでジューシーになりやすい', '必ず辛口', '加水していない', '古酒である'],
+        answer: 1,
+        exp: '生酒は火入れをしていないためフレッシュ感が出やすい。'
+      },
+      {
+        q: '山廃・生酛づくりで感じやすい方向性は？',
+        choices: ['超軽快・無臭', '高酸や旨味の骨格が出やすい', '必ずにごり', '発泡性が強い', 'アルコール度数が極端に低い'],
+        answer: 1,
+        exp: '伝統的製法では乳酸菌由来の酸や旨味の骨格が感じられることが多い。'
+      }
+    ];
+
+    function gradeQuiz(idx, selectedIndex){
+      const q = QUIZ[idx];
+      const options = q.options || q.choices;
+      const isCorrect = selectedIndex === q.answer;
+      const row = document.getElementById(`qrow-${idx}`);
+      const expEl = document.getElementById(`exp${idx}`);
+      if(!row || !expEl) return;
+      row.dataset.correct = isCorrect ? '1' : '0';
+      expEl.classList.remove('hidden');
+      expEl.textContent = isCorrect
+        ? `✅ 正解！ ${q.exp}`
+        : `❌ 正解は「${options[q.answer]}」。${q.exp}`;
+
+      // 合計スコア更新
+      let score = 0;
+      document.querySelectorAll('[id^="qrow-"]').forEach(r => {
+        if(r.dataset.correct === '1') score++;
+      });
+      const total = document.getElementById('quizScore');
+      if(total) total.textContent = `スコア: ${score} / ${QUIZ.length} 点`;
+    }
+
+    function renderQuiz(){
+      const host = document.getElementById('quiz');
+      if(!host) return;
+
+      const html = QUIZ.map((q,qi)=>{
+        const opts = (q.options || q.choices).map((c,ci)=>{
+          return `<label class="flex items-center gap-2 py-1"><input type="radio" name="q${qi}" value="${ci}" class="accent-sky-600"/>${c}</label>`;
+        }).join('');
+        return `
+          <section id="qrow-${qi}" class="bg-white rounded-2xl p-4 shadow-sm border">
+            <h3 class="font-semibold">Q${qi+1}. ${q.q}</h3>
+            <div class="mt-2 grid">${opts}</div>
+            <p id="exp${qi}" class="mt-2 text-sm text-slate-600 hidden"></p>
+          </section>`;
+      }).join('');
+
+      host.innerHTML = html;
+
+      // ラジオ選択で即採点
+      QUIZ.forEach((_, qi)=>{
+        host.querySelectorAll(`input[name="q${qi}"]`).forEach(radio => {
+          radio.addEventListener('change', (e)=>{
+            gradeQuiz(qi, Number(e.target.value));
+          });
+        });
+      });
+
+      const total = document.getElementById('quizScore');
+      if(total) total.textContent = `スコア: 0 / ${QUIZ.length} 点`;
+    }
+
+    // 初期化時にクイズ描画 + テスト
+    document.addEventListener('DOMContentLoaded', async ()=>{
+      init();
+      renderQuiz();
+      setupCSVLoader();
+      await tryFetchLocalCSV();
+      // 既存テスト（変更禁止）
+      console.assert(Array.isArray(QUIZ) && QUIZ.length===5, 'QUIZ should have 5 questions');
+      console.assert(typeof gradeQuiz === 'function', 'gradeQuiz must be defined');
+      console.assert(Array.isArray(DATA) && DATA.length >= 5, 'DATA should have at least 5 items');
+      console.assert(document.getElementById('quiz'), '#quiz exists');
+      console.assert(document.getElementById('quizScore'), '#quizScore exists');
+      // 追加テスト
+      console.assert(QUIZ.every(q => (q.options||q.choices)?.length === 5), 'Each quiz should have exactly 5 choices');
+      console.assert(QUIZ.every(q => Number.isInteger(q.answer) && q.answer >= 0 && q.answer < (q.options||q.choices).length), 'Answer index must be valid');
+    });
+  </script>
+
+  <!-- 日本酒クイズ -->
+  <section class="max-w-5xl mx-auto p-4 md:p-6">
+    <h2 class="text-xl font-semibold mb-2">日本酒クイズ（5問×5択）</h2>
+    <div id="quiz" class="grid gap-3"></div>
+    <p class="mt-3 text-sm text-slate-600">選択するとその場で正誤と解説が表示されます。</p>
+    <p id="quizScore" class="text-sm font-semibold mt-1">スコア: 0 / 5 点</p>
+  </section>
+</body>
+</html>
